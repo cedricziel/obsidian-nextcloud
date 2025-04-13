@@ -1,5 +1,6 @@
 import { App, Notice, Plugin, PluginSettingTab, Setting, TFile } from 'obsidian';
 import { createClient, WebDAVClient } from 'webdav';
+import { requestUrl } from 'obsidian';
 
 interface NextcloudPluginSettings {
 	nextcloudUrl: string;
@@ -10,6 +11,12 @@ interface NextcloudPluginSettings {
 	syncOnStartup: boolean;
 	syncOnSave: boolean;
 	localFolderPath: string;
+	// OAuth v2 auth flow settings
+	accessToken: string;
+	refreshToken: string;
+	tokenExpires: number;
+	tokenType: string;
+	useOAuth: boolean;
 }
 
 interface RemoteFile {
@@ -29,7 +36,12 @@ const DEFAULT_SETTINGS: NextcloudPluginSettings = {
 	syncInterval: 5,
 	syncOnStartup: true,
 	syncOnSave: true,
-	localFolderPath: ''
+	localFolderPath: '',
+	accessToken: '',
+	refreshToken: '',
+	tokenExpires: 0,
+	tokenType: '',
+	useOAuth: false
 }
 
 export default class NextcloudPlugin extends Plugin {
@@ -357,6 +369,240 @@ export default class NextcloudPlugin extends Plugin {
 			throw error;
 		}
 	}
+
+	async initiateOAuthFlow(): Promise<void> {
+		try {
+			if (!this.settings.nextcloudUrl) {
+				new Notice('Please configure your Nextcloud URL first');
+				return;
+			}
+
+			// Step 1: Request login URL and token
+			const loginEndpoint = `${this.settings.nextcloudUrl}/index.php/login/v2`;
+			const response = await requestUrl({
+				url: loginEndpoint,
+				method: 'POST',
+			});
+
+			if (response.status !== 200) {
+				throw new Error(`Failed to initiate login flow: ${response.status}`);
+			}
+
+			const data = response.json;
+			const loginUrl = data.login;
+			const pollUrl = data.poll.endpoint;
+			const pollToken = data.poll.token;
+
+			// Step 2: Open the login URL in browser
+			window.open(loginUrl, '_blank');
+
+			new Notice('Nextcloud login page opened. Please log in through your browser.');
+
+			// Step 3: Poll for auth completion
+			await this.pollForCredentials(pollUrl, pollToken);
+		} catch (error) {
+			console.error('OAuth flow error:', error);
+			new Notice(`OAuth error: ${error.message}`);
+		}
+	}
+
+	async pollForCredentials(pollUrl: string, pollToken: string): Promise<void> {
+		const maxAttempts = 60; // Poll for up to 5 minutes (5s intervals)
+		let attempts = 0;
+
+		// Create a polling status bar
+		const statusBarPoll = this.addStatusBarItem();
+		statusBarPoll.setText('Nextcloud: Waiting for authentication...');
+
+		const poll = async () => {
+			try {
+				const response = await requestUrl({
+					url: pollUrl,
+					method: 'POST',
+					headers: {
+						'Content-Type': 'application/x-www-form-urlencoded',
+					},
+					body: `token=${encodeURIComponent(pollToken)}`,
+				});
+
+				if (response.status === 200) {
+					const data = response.json;
+
+					// Save credentials
+					this.settings.username = data.loginName;
+					this.settings.accessToken = data.appPassword;
+					this.settings.useOAuth = true;
+					this.settings.password = ''; // Clear password since we're using OAuth now
+
+					await this.saveSettings();
+
+					// Set up client with OAuth token
+					this.setupOAuthClient();
+
+					new Notice('Successfully authenticated with Nextcloud!');
+					statusBarPoll.setText('Nextcloud: Connected via OAuth');
+					setTimeout(() => {
+						statusBarPoll.remove();
+					}, 5000);
+
+					return;
+				}
+			} catch (error) {
+				// If we get a 404, it means the login hasn't been completed yet
+				if (error.status !== 404) {
+					console.error('Error polling for credentials:', error);
+					new Notice(`Authentication polling error: ${error.message}`);
+					statusBarPoll.remove();
+					return;
+				}
+			}
+
+			attempts++;
+			if (attempts >= maxAttempts) {
+				new Notice('Authentication timed out. Please try again.');
+				statusBarPoll.remove();
+				return;
+			}
+
+			// Update status with countdown
+			const remainingTime = Math.floor((maxAttempts - attempts) * 5 / 60);
+			statusBarPoll.setText(`Nextcloud: Waiting for authentication... (${remainingTime}m remaining)`);
+
+			// Continue polling
+			setTimeout(poll, 5000);
+		};
+
+		// Start polling
+		poll();
+	}
+
+	setupOAuthClient() {
+		if (!this.settings.nextcloudUrl || !this.settings.accessToken) {
+			this.client = null;
+			if (this.statusBarItem) {
+				this.statusBarItem.setText('Nextcloud: Not Connected');
+			}
+			return;
+		}
+
+		// Create WebDAV client with OAuth token
+		this.client = createClient(
+			`${this.settings.nextcloudUrl}/remote.php/dav/files/${this.settings.username}`,
+			{
+				username: this.settings.username,
+				password: this.settings.accessToken
+			}
+		);
+
+		if (this.statusBarItem) {
+			this.statusBarItem.setText('Nextcloud: Connected via OAuth');
+		}
+	}
+
+	async initiateLoginFlowV2(): Promise<void> {
+		try {
+			if (!this.settings.nextcloudUrl) {
+				new Notice('Please configure your Nextcloud URL first');
+				return;
+			}
+
+			// Step 1: Request login URL and token
+			const loginEndpoint = `${this.settings.nextcloudUrl}/index.php/login/v2`;
+			const response = await requestUrl({
+				url: loginEndpoint,
+				method: 'POST',
+			});
+
+			if (response.status !== 200) {
+				throw new Error(`Failed to initiate login flow: ${response.status}`);
+			}
+
+			const data = response.json;
+			const loginUrl = data.login;
+			const pollUrl = data.poll.endpoint;
+			const pollToken = data.poll.token;
+
+			// Step 2: Open the login URL in browser
+			window.open(loginUrl, '_blank');
+
+			new Notice('Nextcloud login page opened. Please log in through your browser.');
+
+			// Step 3: Poll for credentials
+			await this.pollForLoginFlow(pollUrl, pollToken);
+		} catch (error) {
+			console.error('Login flow error:', error);
+			new Notice(`Login flow error: ${error.message}`);
+		}
+	}
+
+	async pollForLoginFlow(pollUrl: string, pollToken: string): Promise<void> {
+		const maxAttempts = 60; // Poll for up to 5 minutes (5s intervals)
+		let attempts = 0;
+
+		// Create a polling status bar
+		const statusBarPoll = this.addStatusBarItem();
+		statusBarPoll.setText('Nextcloud: Waiting for authentication...');
+
+		const poll = async () => {
+			try {
+				const response = await requestUrl({
+					url: pollUrl,
+					method: 'POST',
+					headers: {
+						'Content-Type': 'application/x-www-form-urlencoded',
+					},
+					body: `token=${encodeURIComponent(pollToken)}`,
+				});
+
+				if (response.status === 200) {
+					const data = response.json;
+
+					// Save credentials
+					this.settings.username = data.loginName;
+					this.settings.password = data.appPassword; // Store the app password
+					this.settings.useOAuth = false; // This is not OAuth, it's login flow v2
+
+					await this.saveSettings();
+
+					// Set up client with the new credentials
+					this.setupClient();
+
+					new Notice('Successfully authenticated with Nextcloud!');
+					statusBarPoll.setText('Nextcloud: Connected');
+					setTimeout(() => {
+						statusBarPoll.remove();
+					}, 5000);
+
+					return;
+				}
+			} catch (error) {
+				// If we get a 404, it means the login hasn't been completed yet
+				if (error.status !== 404) {
+					console.error('Error polling for credentials:', error);
+					new Notice(`Authentication polling error: ${error.message}`);
+					statusBarPoll.remove();
+					return;
+				}
+			}
+
+			attempts++;
+			if (attempts >= maxAttempts) {
+				new Notice('Authentication timed out. Please try again.');
+				statusBarPoll.remove();
+				return;
+			}
+
+			// Update status with countdown
+			const remainingTime = Math.floor((maxAttempts - attempts) * 5 / 60);
+			statusBarPoll.setText(`Nextcloud: Waiting for authentication... (${remainingTime}m remaining)`);
+
+			// Continue polling
+			setTimeout(poll, 5000);
+		};
+
+		// Start polling
+		poll();
+	}
 }
 
 class NextcloudSettingTab extends PluginSettingTab {
@@ -386,9 +632,29 @@ class NextcloudSettingTab extends PluginSettingTab {
 					await this.plugin.saveSettings();
 				}));
 
+		// Add Login Flow v2 button
+		new Setting(containerEl)
+			.setName('Browser Authentication')
+			.setDesc('Authenticate with your Nextcloud instance using your browser (recommended)')
+			.addButton(button => button
+				.setButtonText('Login with browser')
+				.setCta()
+				.onClick(async () => {
+					await this.plugin.initiateLoginFlowV2();
+				}));
+
+		// Create a section divider
+		containerEl.createEl('div', {
+			text: '— OR —',
+			attr: {
+				style: 'text-align: center; margin: 1rem 0; color: var(--text-muted);'
+			}
+		});
+
+		// Username field
 		new Setting(containerEl)
 			.setName('Username')
-			.setDesc('Your Nextcloud username')
+			.setDesc('Your Nextcloud username for direct authentication')
 			.addText(text => text
 				.setPlaceholder('username')
 				.setValue(this.plugin.settings.username)
@@ -397,9 +663,10 @@ class NextcloudSettingTab extends PluginSettingTab {
 					await this.plugin.saveSettings();
 				}));
 
+		// Password field
 		new Setting(containerEl)
 			.setName('Password')
-			.setDesc('Your Nextcloud password (or app password)')
+			.setDesc('Your Nextcloud password or app password for direct authentication')
 			.addText(text => {
 				text.setPlaceholder('password')
 					.setValue(this.plugin.settings.password)
@@ -412,6 +679,7 @@ class NextcloudSettingTab extends PluginSettingTab {
 				return text;
 			});
 
+		// Rest of the settings remain the same
 		new Setting(containerEl)
 			.setName('Collectives Path')
 			.setDesc('The path to your Collectives folder in Nextcloud (default is /Collectives)')
