@@ -70,7 +70,9 @@ export default class NextcloudPlugin extends Plugin {
 				this.setupClient();
 				if (this.client) {
 					new Notice('Connected to Nextcloud');
-					this.statusBarItem.setText('Nextcloud: Connected');
+					if (this.statusBarItem) {
+						this.statusBarItem.setText('Nextcloud: Connected');
+					}
 				}
 			}
 		});
@@ -134,7 +136,9 @@ export default class NextcloudPlugin extends Plugin {
 		// Only set up client if we have credentials
 		if (!this.settings.nextcloudUrl || !this.settings.username || !this.settings.password) {
 			this.client = null;
-			this.statusBarItem.setText('Nextcloud: Not Connected');
+			if (this.statusBarItem) {
+				this.statusBarItem.setText('Nextcloud: Not Connected');
+			}
 			return;
 		}
 
@@ -147,7 +151,9 @@ export default class NextcloudPlugin extends Plugin {
 			}
 		);
 
-		this.statusBarItem.setText('Nextcloud: Connected');
+		if (this.statusBarItem) {
+			this.statusBarItem.setText('Nextcloud: Connected');
+		}
 	}
 
 	startSyncInterval() {
@@ -168,7 +174,9 @@ export default class NextcloudPlugin extends Plugin {
 
 		try {
 			// Update status
-			this.statusBarItem.setText('Nextcloud: Syncing...');
+			if (this.statusBarItem) {
+				this.statusBarItem.setText('Nextcloud: Syncing...');
+			}
 
 			// Get local folder path or default to vault root
 			const folderPath = this.settings.localFolderPath || '/';
@@ -179,12 +187,16 @@ export default class NextcloudPlugin extends Plugin {
 			// Then, download any remote changes
 			await this.downloadChanges(folderPath);
 
-			this.statusBarItem.setText('Nextcloud: Connected');
+			if (this.statusBarItem) {
+				this.statusBarItem.setText('Nextcloud: Connected');
+			}
 			new Notice('Sync with Nextcloud Collectives completed');
 		} catch (error) {
 			console.error('Error syncing with Nextcloud:', error);
 			new Notice('Error syncing with Nextcloud: ' + error.message);
-			this.statusBarItem.setText('Nextcloud: Error');
+			if (this.statusBarItem) {
+				this.statusBarItem.setText('Nextcloud: Error');
+			}
 		}
 	}
 

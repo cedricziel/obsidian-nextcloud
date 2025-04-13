@@ -5,8 +5,14 @@
 	"main": "main.js",
 	"scripts": {
 		"dev": "node esbuild.config.mjs",
+		"dev:watch": "node esbuild.config.mjs watch",
+		"dev:hot": "node esbuild.config.mjs hot",
+		"dev:debug": "node esbuild.config.mjs development --sourcemap=inline",
 		"build": "tsc -noEmit -skipLibCheck && node esbuild.config.mjs production",
-		"version": "node version-bump.mjs && git add manifest.json versions.json"
+		"version": "node version-bump.mjs && git add manifest.json versions.json",
+		"start": "npm run dev:watch",
+		"link-plugin": "node scripts/link-plugin.mjs",
+		"dev-vault": "npm run build && npm run link-plugin && node scripts/open-obsidian.mjs"
 	},
 	"keywords": [],
 	"author": "",
